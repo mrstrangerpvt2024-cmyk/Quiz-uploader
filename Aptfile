@@ -1,2 +1,5 @@
-fonts-dejavu-core
-ttf-mscorefonts-installer
+chromium
+chromium-driver
+fonts-noto-cjk
+fonts-noto-hinted
+fonts-noto-unhinted
