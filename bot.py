@@ -2,6 +2,7 @@ from quizbot.runner.handlers import quiz_handler
 import os
 import re
 import asyncio
+import requests
 from threading import Thread
 from io import BytesIO
 
@@ -14,12 +15,11 @@ from pyrogram.types import (
     CallbackQuery
 )
 from pyrogram.enums import PollType
-
-from html2image import Html2Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 # ============================================================
-# FLASK SERVER FOR RENDER / RAILWAY
+# FLASK SERVER FOR RAILWAY / RENDER
 # ============================================================
 
 web_app = Flask(__name__)
@@ -55,132 +55,96 @@ USER_ACTIVE_FILES = {}
 STOP_TASKS = {}
 AWAITING_CHAT_ID = set()
 
-# Initialize HTML-to-Image renderer with Railway Chromium flags
-hti = Html2Image(
-    custom_flags=[
-        '--no-sandbox',
-        '--disable-gpu',
-        '--disable-software-rasterizer',
-        '--disable-dev-shm-usage'
-    ]
-)
+
+# ============================================================
+# HINDI FONT AUTO-DOWNLOADER
+# ============================================================
+
+FONT_PATH = "NotoSansDevanagari.ttf"
+
+def get_hindi_font(size: int):
+    if not os.path.exists(FONT_PATH):
+        try:
+            url = "https://github.com/google/fonts/raw/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                with open(FONT_PATH, "wb") as f:
+                    f.write(r.content)
+        except Exception as e:
+            print(f"Font download error: {e}")
+
+    if os.path.exists(FONT_PATH):
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except Exception:
+            pass
+
+    return ImageFont.load_default()
 
 
 # ============================================================
-# HTML ENGINE (TELEGRAM DARK THEME TABLE CARD)
+# DARK MODE IMAGE GENERATOR (UI CARD)
 # ============================================================
 
-def generate_html_quiz_card(q_num: int, question_text: str) -> str:
-    # Match List / Sumelit check to generate table layout
-    is_table_question = any(kw in question_text.lower() for kw in ["सूची", "सुमेलित", "match", "list-i"])
-
-    body_content = ""
-
-    if is_table_question and ":" in question_text:
-        parts = question_text.split(":", 1)
-        header_title = parts[0].strip()
-        data_part = parts[1].strip() if len(parts) > 1 else ""
-
-        # Format items into table rows
-        rows = data_part.split(",")
-        table_rows_html = ""
-        for r in rows:
-            if "|" in r:
-                c1, c2 = r.split("|", 1)
-            elif "-" in r:
-                c1, c2 = r.split("-", 1)
-            else:
-                c1, c2 = r, ""
-            table_rows_html += f"<tr><td>{c1.strip()}</td><td>{c2.strip()}</td></tr>"
-
-        body_content = f"""
-        <div class="q-title">{header_title}</div>
-        <table class="match-table">
-            {table_rows_html}
-        </table>
-        """
-    else:
-        formatted_text = question_text.replace("\n", "<br>")
-        body_content = f'<div class="q-text">{formatted_text}</div>'
-
-    html_code = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;600&display=swap');
-            body {{
-                background-color: #0e1621;
-                margin: 0;
-                padding: 20px;
-                font-family: 'Noto Sans Devanagari', sans-serif;
-                color: #e3e5e8;
-                width: 720px;
-            }}
-            .card {{
-                background-color: #17212b;
-                border: 1px solid #242f3d;
-                border-radius: 12px;
-                padding: 20px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            }}
-            .header {{
-                color: #5288c1;
-                font-size: 20px;
-                font-weight: 600;
-                margin-bottom: 14px;
-                border-bottom: 1px solid #242f3d;
-                padding-bottom: 8px;
-            }}
-            .q-text {{
-                font-size: 18px;
-                line-height: 1.6;
-                white-space: pre-wrap;
-            }}
-            .match-table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 12px;
-            }}
-            .match-table td {{
-                border: 1px solid #242f3d;
-                padding: 10px 12px;
-                font-size: 16px;
-                vertical-align: top;
-            }}
-            .match-table tr:nth-child(even) {{
-                background-color: #1e2c3a;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <div class="header">📌 Question #{q_num}</div>
-            {body_content}
-        </div>
-    </body>
-    </html>
-    """
-    return html_code
-
-
-def render_card_image(q_num: int, question_text: str) -> BytesIO:
-    html_content = generate_html_quiz_card(q_num, question_text)
-    out_filename = f"q_{q_num}.png"
+def generate_dark_quiz_card(q_num: int, question_text: str) -> BytesIO:
+    width = 1000
     
-    # Render HTML to PNG image
-    hti.screenshot(html_str=html_content, save_as=out_filename)
+    bg_color = (21, 30, 40)
+    card_color = (29, 41, 57)
+    border_color = (43, 60, 80)
+    text_color = (245, 247, 250)
+    title_color = (100, 180, 250)
     
-    img_stream = BytesIO()
-    with open(out_filename, "rb") as f:
-        img_stream.write(f.read())
-    img_stream.seek(0)
+    font = get_hindi_font(26)
+    title_font = get_hindi_font(30)
 
-    if os.path.exists(out_filename):
-        os.remove(out_filename)
+    # Line Wrapping Logic
+    max_chars_per_line = 44
+    words = question_text.split()
+    lines = []
+    current_line = []
 
-    return img_stream
+    for word in words:
+        current_line.append(word)
+        if len(" ".join(current_line)) > max_chars_per_line:
+            current_line.pop()
+            lines.append(" ".join(current_line))
+            current_line = [word]
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    line_height = 45
+    calculated_height = 180 + (len(lines) * line_height)
+    height = max(500, min(2500, calculated_height))
+
+    image = Image.new("RGB", (width, height), color=bg_color)
+    draw = ImageDraw.Draw(image)
+
+    # Rounded Card Border
+    draw.rounded_rectangle(
+        [30, 30, width - 30, height - 30],
+        radius=18,
+        fill=card_color,
+        outline=border_color,
+        width=2
+    )
+
+    # Header
+    draw.text((60, 55), f"📌 Question #{q_num}", fill=title_color, font=title_font)
+    draw.line([(50, 105), (width - 50, 105)], fill=border_color, width=2)
+
+    # Question Render
+    y_offset = 130
+    for line in lines:
+        draw.text((60, y_offset), line, fill=text_color, font=font)
+        y_offset += line_height
+
+    img_byte_arr = BytesIO()
+    img_byte_arr.name = f"question_{q_num}.png"
+    image.save(img_byte_arr, format="PNG")
+    img_byte_arr.seek(0)
+
+    return img_byte_arr
 
 
 def should_make_image(question_text: str) -> bool:
@@ -272,7 +236,7 @@ async def start_cmd(client: Client, message: Message):
     await message.reply_text(
         f"👋 **Welcome to Quiz Uploader Bot!**\n\n"
         f"🎯 **Target Chat:** `{saved_chat}`\n\n"
-        f"`.txt` file send karke `/quiz` dabaayein.",
+        f"`.txt` file bhej kar `/quiz` press karein.",
         reply_markup=keyboard
     )
 
@@ -354,11 +318,11 @@ async def start_quiz_process(client: Client, union_obj):
 
         quizzes = parse_quiz_file(content)
         if not quizzes:
-            await status_msg.edit_text("❌ Quiz parse nahi ho paaye.")
+            await status_msg.edit_text("❌ Valid quiz format nahi mila.")
             return
 
         target_chat_id = int(target_chat)
-        await status_msg.edit_text(f"🚀 Upload Started! Total: `{len(quizzes)}`")
+        await status_msg.edit_text(f"🚀 Upload Started! Total Questions: `{len(quizzes)}`")
 
         STOP_TASKS[user_id] = True
         success_count = 0
@@ -373,8 +337,7 @@ async def start_quiz_process(client: Client, union_obj):
                 full_question = q["question"]
 
                 if should_make_image(full_question):
-                    # HTML Card Render
-                    img_stream = render_card_image(idx, full_question)
+                    img_stream = generate_dark_quiz_card(idx, full_question)
                     await client.send_photo(
                         chat_id=target_chat_id,
                         photo=img_stream,
@@ -384,7 +347,6 @@ async def start_quiz_process(client: Client, union_obj):
                 else:
                     poll_question = f"{idx}. {full_question}"[:300]
 
-                # Send Poll
                 await client.send_poll(
                     chat_id=target_chat_id,
                     question=poll_question,
@@ -399,7 +361,7 @@ async def start_quiz_process(client: Client, union_obj):
                 await asyncio.sleep(2.5)
 
             except Exception as e:
-                print(f"Error Q{idx}: {e}")
+                print(f"Upload Error Q{idx}: {e}")
 
         await status_msg.edit_text(f"✅ Upload Complete! Total Posted: **{success_count}/{len(quizzes)}**")
 
