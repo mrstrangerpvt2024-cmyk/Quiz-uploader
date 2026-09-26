@@ -1,6 +1,8 @@
+from quizbot.runner.handlers import quiz_handler
 import os
 import re
 import asyncio
+import requests
 from threading import Thread
 from io import BytesIO
 
@@ -14,7 +16,6 @@ from pyrogram.types import (
 )
 from pyrogram.enums import PollType
 
-# Image Generation Library (PIL)
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -24,47 +25,24 @@ from PIL import Image, ImageDraw, ImageFont
 
 web_app = Flask(__name__)
 
-
 @web_app.route("/")
 def health_check():
     return "Quiz Bot Active & Running!", 200
 
-
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
-    web_app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    web_app.run(host="0.0.0.0", port=port)
 
-
-Thread(
-    target=run_web_server,
-    daemon=True
-).start()
+Thread(target=run_web_server, daemon=True).start()
 
 
 # ============================================================
 # BOT CONFIGURATION
 # ============================================================
 
-API_ID = int(
-    os.environ.get(
-        "API_ID",
-        "12345678"
-    )
-)
-
-API_HASH = os.environ.get(
-    "API_HASH",
-    "your_api_hash"
-)
-
-BOT_TOKEN = os.environ.get(
-    "BOT_TOKEN",
-    "your_bot_token"
-)
-
+API_ID = int(os.environ.get("API_ID", "12345678"))
+API_HASH = os.environ.get("API_HASH", "your_api_hash")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
 
 app = Client(
     "quiz_uploader_bot",
@@ -73,11 +51,6 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-
-# ============================================================
-# MEMORY STORAGE
-# ============================================================
-
 USER_CHAT_CONFIG = {}
 USER_ACTIVE_FILES = {}
 STOP_TASKS = {}
@@ -85,34 +58,50 @@ AWAITING_CHAT_ID = set()
 
 
 # ============================================================
-# HELPER: FONT LOADING FOR RAILWAY / LINUX
+# HELPER: DOWNLOAD HINDI FONT FOR RAILWAY
 # ============================================================
 
-def load_system_font(size: int):
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "arial.ttf"
-    ]
-    for path in font_paths:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
+FONT_PATH = "NotoSansDevanagari.ttf"
+
+def get_hindi_font(size: int):
+    if not os.path.exists(FONT_PATH):
+        try:
+            url = "https://github.com/google/fonts/raw/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                with open(FONT_PATH, "wb") as f:
+                    f.write(r.content)
+        except Exception as e:
+            print(f"Font download error: {e}")
+
+    if os.path.exists(FONT_PATH):
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except Exception:
+            pass
+
     return ImageFont.load_default()
 
 
 # ============================================================
-# HELPER: IMAGE GENERATOR FOR LONG / COMPLEX QUESTIONS
+# DARK MODE TABLE CARD GENERATOR (Screenshot Style)
 # ============================================================
 
-def generate_question_image(q_num: int, question_text: str) -> BytesIO:
-    width = 1080
+def generate_dark_quiz_card(q_num: int, question_text: str) -> BytesIO:
+    width = 1000
     
-    # Text wrapping logic
-    max_chars_per_line = 48
+    # Colors matching Telegram Dark Theme
+    bg_color = (21, 30, 40)        # Deep Dark Background
+    card_color = (29, 41, 57)      # Inner Card Color
+    border_color = (43, 60, 80)    # Border Color
+    text_color = (245, 247, 250)   # White/Light Text
+    title_color = (100, 180, 250)  # Accent Color
+    
+    font = get_hindi_font(26)
+    title_font = get_hindi_font(30)
+
+    # Word Wrap Logic
+    max_chars_per_line = 45
     words = question_text.split()
     lines = []
     current_line = []
@@ -126,45 +115,32 @@ def generate_question_image(q_num: int, question_text: str) -> BytesIO:
     if current_line:
         lines.append(" ".join(current_line))
 
-    # Auto calculate height based on question length
-    line_height = 42
-    calculated_height = 200 + (len(lines) * line_height)
-    height = max(500, min(2200, calculated_height))
+    line_height = 45
+    calculated_height = 180 + (len(lines) * line_height)
+    height = max(500, min(2500, calculated_height))
 
-    background_color = (245, 247, 250)
-    card_color = (255, 255, 255)
-    text_color = (33, 37, 41)
-    header_color = (13, 110, 253)
-
-    image = Image.new("RGB", (width, height), color=background_color)
+    image = Image.new("RGB", (width, height), color=bg_color)
     draw = ImageDraw.Draw(image)
 
-    # Card background
+    # Main Outer Rounded Card
     draw.rounded_rectangle(
         [30, 30, width - 30, height - 30],
-        radius=20,
+        radius=18,
         fill=card_color,
-        outline=(222, 226, 230),
-        width=3
+        outline=border_color,
+        width=2
     )
 
-    header_font = load_system_font(34)
-    body_font = load_system_font(28)
+    # Title Line
+    draw.text((60, 55), f"📌 Question #{q_num}", fill=title_color, font=title_font)
+    draw.line([(50, 105), (width - 50, 105)], fill=border_color, width=2)
 
-    # Draw Header / Title
-    header_text = f"Question #{q_num}"
-    draw.text((70, 60), header_text, fill=header_color, font=header_font)
-
-    # Render Lines
+    # Question Content Rendering
     y_offset = 130
     for line in lines:
-        if y_offset > height - 70:
-            draw.text((70, y_offset), "...", fill=text_color, font=body_font)
-            break
-        draw.text((70, y_offset), line, fill=text_color, font=body_font)
+        draw.text((60, y_offset), line, fill=text_color, font=font)
         y_offset += line_height
 
-    # Save image to buffer
     img_byte_arr = BytesIO()
     img_byte_arr.name = f"question_{q_num}.png"
     image.save(img_byte_arr, format="PNG")
@@ -174,23 +150,20 @@ def generate_question_image(q_num: int, question_text: str) -> BytesIO:
 
 
 def should_make_image(question_text: str) -> bool:
-    # Length Check (Telegram Poll Question Limit is 300 Chars)
-    if len(question_text) > 180:
+    if len(question_text) > 150:
         return True
     
-    # Keywords & Pattern Matching for Complex Questions
-    image_keywords = [
+    keywords = [
         "सुमेलित", "सूची", "कथन", "कथनों", "मिलाइए", "सम्मिलित",
         "match", "statement", "list-i", "list-ii", "सूची-i", "सूची-ii",
         "निम्नलिखित", "कथनों पर विचार"
     ]
     
     q_lower = question_text.lower()
-    for kw in image_keywords:
+    for kw in keywords:
         if kw in q_lower:
             return True
 
-    # If question contains listed statements like '1.', '2.', 'A.', 'B.'
     if re.search(r"\b[1-4]\.\s", question_text) or re.search(r"\b[A-D]\.\s", question_text):
         return True
 
@@ -250,7 +223,7 @@ def parse_quiz_file(file_content: str) -> list:
 
 
 # ============================================================
-# BOT COMMAND HANDLERS
+# HANDLERS
 # ============================================================
 
 @app.on_message(filters.command("start"))
@@ -263,13 +236,9 @@ async def start_cmd(client: Client, message: Message):
     ])
 
     await message.reply_text(
-        f"👋 **Welcome to Quiz Uploader Bot!**\n\n"
-        f"🎯 **Saved Target Chat ID:** `{saved_chat}`\n\n"
-        f"📌 **Instructions:**\n"
-        f"1. Chat ID set karein.\n"
-        f"2. `.txt` Quiz File bhejein.\n"
-        f"3. Long & Sumelit / Statement vaale questions ki image automatically ban jayegi.\n"
-        f"4. `/quiz` se upload start karein.",
+        f"👋 **Welcome to Advance Quiz Uploader Bot!**\n\n"
+        f"🎯 **Target Chat:** `{saved_chat}`\n\n"
+        f"`.txt` file bhej kar `/quiz` start karein.",
         reply_markup=keyboard
     )
 
@@ -278,9 +247,7 @@ async def start_cmd(client: Client, message: Message):
 async def cb_save_chat(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     AWAITING_CHAT_ID.add(user_id)
-    await callback_query.message.reply_text(
-        "✏️ **Target Chat ID Bhejein:**\nExample:\n`-1004399820534`"
-    )
+    await callback_query.message.reply_text("✏️ Target Chat ID Bhejein:")
     await callback_query.answer()
 
 
@@ -312,10 +279,7 @@ async def handle_document_upload(client: Client, message: Message):
     target_chat = USER_CHAT_CONFIG.get(user_id)
 
     if not target_chat:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Save Chat ID", callback_data="btn_save_chat_id")]
-        ])
-        await message.reply_text("⚠️ **Target Chat ID Set Nahi Hai!**", reply_markup=keyboard)
+        await message.reply_text("⚠️ Target Chat ID set karein.")
         return
 
     keyboard = InlineKeyboardMarkup([
@@ -323,14 +287,10 @@ async def handle_document_upload(client: Client, message: Message):
     ])
 
     await message.reply_text(
-        f"📄 **File Received:** `{file_name}`\n🎯 **Target Chat:** `{target_chat}`",
+        f"📄 **File:** `{file_name}`\n🎯 **Chat:** `{target_chat}`",
         reply_markup=keyboard
     )
 
-
-# ============================================================
-# QUIZ UPLOADER
-# ============================================================
 
 @app.on_message(filters.command("quiz"))
 @app.on_callback_query(filters.regex("^btn_trigger_quiz$"))
@@ -347,7 +307,7 @@ async def start_quiz_process(client: Client, union_obj):
     doc_message = USER_ACTIVE_FILES.get(user_id)
 
     if not target_chat or not doc_message:
-        await message.reply_text("❌ Target Chat ID ya File missing hai.")
+        await message.reply_text("❌ Chat ID ya File missing hai.")
         return
 
     status_msg = await message.reply_text("📥 Processing Quiz File...")
@@ -360,75 +320,54 @@ async def start_quiz_process(client: Client, union_obj):
 
         quizzes = parse_quiz_file(content)
         if not quizzes:
-            await status_msg.edit_text("❌ **No Valid Quiz Found!**")
+            await status_msg.edit_text("❌ Quiz parse nahi ho paaye.")
             return
 
         target_chat_id = int(target_chat)
-        await client.get_chat(target_chat_id)
-
-        await status_msg.edit_text(
-            f"🚀 **Quiz Upload Started!**\n📊 Total: `{len(quizzes)}`"
-        )
+        await status_msg.edit_text(f"🚀 Upload Started! Total: `{len(quizzes)}`")
 
         STOP_TASKS[user_id] = True
         success_count = 0
-        failed_count = 0
 
         for idx, q in enumerate(quizzes, start=1):
             if not STOP_TASKS.get(user_id, False):
-                await status_msg.edit_text("🛑 Upload Stopped!")
+                await status_msg.edit_text("🛑 Process Stopped.")
                 break
 
             try:
                 correct_id = int(q["correct_option_id"])
                 full_question = q["question"]
 
-                # CHECK: Dynamic Image logic
                 if should_make_image(full_question):
-                    img_stream = generate_question_image(idx, full_question)
-
-                    # 1. Question image send karein
+                    # Generate Dark Mode Card
+                    img_stream = generate_dark_quiz_card(idx, full_question)
                     await client.send_photo(
                         chat_id=target_chat_id,
                         photo=img_stream,
-                        caption=f"📌 **Question #{idx}**\n\nUpar image mein question dekhein aur sahi uttar chunein 👇"
+                        caption=f"📌 **Question #{idx}**\n\nSahi uttar niche chunein 👇"
                     )
-
-                    # 2. Options ke liye Poll send karein
-                    poll_question = f"Question #{idx}: Sahi uttar chunein:"
-                    await client.send_poll(
-                        chat_id=target_chat_id,
-                        question=poll_question,
-                        options=q["options"],
-                        type=PollType.QUIZ,
-                        correct_option_id=correct_id,
-                        explanation=q["explanation"],
-                        is_anonymous=True
-                    )
+                    poll_question = f"Question #{idx}: Isme right answer konsa hoga?"
                 else:
-                    # Normal Poll send karein
-                    poll_question = f"{idx}. {full_question}"
-                    await client.send_poll(
-                        chat_id=target_chat_id,
-                        question=poll_question,
-                        options=q["options"],
-                        type=PollType.QUIZ,
-                        correct_option_id=correct_id,
-                        explanation=q["explanation"],
-                        is_anonymous=True
-                    )
+                    poll_question = f"{idx}. {full_question}"[:300]
+
+                # Send Poll
+                await client.send_poll(
+                    chat_id=target_chat_id,
+                    question=poll_question,
+                    options=q["options"],
+                    type=PollType.QUIZ,
+                    correct_option_id=correct_id,
+                    explanation=q["explanation"],
+                    is_anonymous=True
+                )
 
                 success_count += 1
                 await asyncio.sleep(2.5)
 
             except Exception as e:
-                failed_count += 1
                 print(f"Error Q{idx}: {e}")
 
-        await status_msg.edit_text(
-            f"✅ **Upload Complete!**\n"
-            f"📊 Success: **{success_count}/{len(quizzes)}** | Failed: **{failed_count}**"
-        )
+        await status_msg.edit_text(f"✅ Upload Complete! Posted: **{success_count}/{len(quizzes)}**")
 
     except Exception as e:
         await status_msg.edit_text(f"❌ Error: `{e}`")
@@ -445,8 +384,6 @@ async def stop_quiz_process(client: Client, message: Message):
     if STOP_TASKS.get(user_id):
         STOP_TASKS[user_id] = False
         await message.reply_text("🛑 **Stop Signal Sent!**")
-    else:
-        await message.reply_text("⚠️ Koi active process nahi hai.")
 
 
 if __name__ == "__main__":
