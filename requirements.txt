@@ -1,7 +1,6 @@
+python-telegram-bot
 pyrogram==2.0.106
 tgcrypto==1.2.5
-flask
-Pillow
-aiohttp
-pymongo
-python-telegram-bot
+Flask==3.0.2
+gunicorn==21.2.0
+Pillow==10.2.0
