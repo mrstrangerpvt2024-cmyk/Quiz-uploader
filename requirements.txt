@@ -1,3 +1,7 @@
 pyrogram==2.0.106
 tgcrypto==1.2.5
 flask
+Pillow
+aiohttp
+pymongo
+python-telegram-bot
