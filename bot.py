@@ -1,3 +1,4 @@
+from quizbot.runner.handlers import quiz_handler  # Path check kar lein
 import os
 import re
 import asyncio
