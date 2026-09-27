@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 from threading import Thread
 from flask import Flask
@@ -13,8 +12,8 @@ from pyrogram.types import (
 )
 from pyrogram.enums import PollType
 
-# Pillow for Image Generation
-from PIL import Image, ImageDraw, ImageFont
+# Apne quiz folder se functions import karein
+from quiz import generate_table_card, parse_match_quiz
 
 
 # ============================================================
@@ -61,147 +60,6 @@ AWAITING_CHAT_ID = set()
 
 
 # ============================================================
-# IMAGE GENERATOR FUNCTION
-# ============================================================
-
-def draw_wrapped_text(draw, text, font, x, y, max_width, fill_color):
-    """टेक्स्ट को ऑटोमैटिकली अगली लाइन पर रैप करता है"""
-    words = text.split(' ')
-    lines = []
-    current_line = []
-
-    for word in words:
-        current_line.append(word)
-        bbox = draw.textbbox((0, 0), ' '.join(current_line), font=font)
-        if bbox[2] - bbox[0] > max_width:
-            current_line.pop()
-            lines.append(' '.join(current_line))
-            current_line = [word]
-    lines.append(' '.join(current_line))
-
-    current_y = y
-    for line in lines:
-        draw.text((x, current_y), line, font=font, fill=fill_color)
-        bbox = draw.textbbox((0, 0), line, font=font)
-        current_y += (bbox[3] - bbox[1]) + 8  # Line spacing
-
-    return current_y
-
-
-def create_question_image(q_num: int, question_text: str, options: list, output_path="quiz_image.png") -> str:
-    """प्रश्नों को सुंदर डार्क-थीम वाली कार्ड इमेज में कन्वर्ट करता है"""
-    BG_COLOR = (24, 34, 45)       # Telegram Dark Theme BG
-    CARD_BG = (32, 44, 58)        # Card BG
-    TEXT_COLOR = (245, 245, 245)   # Main Text
-    ACCENT_COLOR = (74, 155, 255) # Header Accent
-    OPTION_COLOR = (200, 220, 240)# Option Text
-    
-    WIDTH = 800
-    PADDING = 25
-
-    try:
-        # Default font loader
-        font_title = ImageFont.truetype("arial.ttf", 22)
-        font_q = ImageFont.truetype("arial.ttf", 20)
-        font_opt = ImageFont.truetype("arial.ttf", 18)
-    except:
-        font_title = font_q = font_opt = ImageFont.load_default()
-
-    # ऊंचाई मापने के लिए डमी इमेज
-    dummy_img = Image.new("RGB", (WIDTH, 2000), BG_COLOR)
-    draw = ImageDraw.Draw(dummy_img)
-
-    y = PADDING
-    
-    # हेडर (Question Number)
-    draw.text((PADDING, y), f"Q {q_num}.", font=font_title, fill=ACCENT_COLOR)
-    y += 35
-
-    # सवाल
-    y = draw_wrapped_text(draw, question_text, font_q, PADDING, y, WIDTH - (PADDING * 2), TEXT_COLOR)
-    y += 20
-
-    # ऑप्शंस बॉक्स कार्ड
-    opt_labels = ["A", "B", "C", "D"]
-    for i, opt in enumerate(options):
-        opt_str = f"{opt_labels[i]}) {opt}"
-        opt_start_y = y
-        y = draw_wrapped_text(draw, opt_str, font_opt, PADDING + 15, y + 10, WIDTH - (PADDING * 2) - 30, OPTION_COLOR)
-        opt_height = y - opt_start_y + 10
-        
-        # Option Box Outline
-        draw.rectangle(
-            [PADDING, opt_start_y, WIDTH - PADDING, opt_start_y + opt_height],
-            fill=CARD_BG,
-            outline=(50, 65, 82),
-            width=1
-        )
-        # Re-draw text over rectangle
-        draw_wrapped_text(draw, opt_str, font_opt, PADDING + 15, opt_start_y + 10, WIDTH - (PADDING * 2) - 30, OPTION_COLOR)
-        y = opt_start_y + opt_height + 10
-
-    total_height = y + PADDING
-
-    # Final Image Crop & Save
-    final_img = dummy_img.crop((0, 0, WIDTH, total_height))
-    final_img.save(output_path)
-    return output_path
-
-
-# ============================================================
-# QUIZ PARSER
-# ============================================================
-
-def parse_quiz_file(file_content: str) -> list:
-    quizzes = []
-    answer_map = {"A": 0, "B": 1, "C": 2, "D": 3}
-
-    for line_no, line in enumerate(file_content.splitlines(), 1):
-        line = line.strip()
-        if not line or "|" not in line:
-            continue
-
-        parts = [x.strip() for x in line.split("|", 3)]
-        if len(parts) < 3:
-            continue
-
-        question = parts[0].strip()
-        question = re.sub(r"^Q\s*\d+\.\s*", "", question, flags=re.IGNORECASE).strip()
-
-        option_text = parts[1].strip()
-        option_matches = re.findall(
-            r"(?:^|,\s*)([A-D])\)\s*(.*?)(?=,\s*[A-D]\)\s*|$)",
-            option_text,
-            flags=re.IGNORECASE
-        )
-
-        options = [opt.strip() for _, opt in option_matches if opt.strip()]
-        if len(options) != 4:
-            continue
-
-        raw_answer = parts[2].strip().upper()
-        answer_match = re.search(r"[A-D]", raw_answer)
-        if not answer_match:
-            continue
-
-        correct_letter = answer_match.group(0)
-        correct_option_id = answer_map[correct_letter]
-
-        explanation = parts[3].strip() if len(parts) >= 4 else ""
-        explanation = explanation[:200]
-
-        quizzes.append({
-            "question": question,
-            "options": options,
-            "correct_option_id": correct_option_id,
-            "correct_answer": correct_letter,
-            "explanation": explanation
-        })
-
-    return quizzes
-
-
-# ============================================================
 # /START & CHAT CONFIG HANDLERS
 # ============================================================
 
@@ -215,13 +73,14 @@ async def start_cmd(client: Client, message: Message):
     ])
 
     await message.reply_text(
-        f"👋 **Welcome to Quiz Image Uploader Bot!**\n\n"
+        f"👋 **Welcome to Matching Quiz Card Bot!**\n\n"
         f"🎯 **Saved Target Chat ID:** `{saved_chat}`\n\n"
         f"📌 **Instructions:**\n"
-        f"1. Chat ID set karein.\n"
-        f"2. `.txt` Quiz File bhejein.\n"
-        f"3. Bot automatic **Image Card** banakar quiz post karega!\n\n"
-        f"Format:\n`Question | A) Opt1, B) Opt2, C) Opt3, D) Opt4 | B | Explanation`",
+        f"1. Target Chat ID save karein.\n"
+        f"2. Matching Quiz wali `.txt` File bhejein.\n"
+        f"3. Bot automatic **Table Border Card Image** banakar upload karega!\n\n"
+        f"📝 **File Format:**\n"
+        f"`Question Title | List I # List II | Left1 :: Right1 ; Left2 :: Right2 | A) Opt1, B) Opt2, C) Opt3, D) Opt4 | Ans | Explanation`",
         reply_markup=keyboard
     )
 
@@ -275,7 +134,7 @@ async def handle_document_upload(client: Client, message: Message):
 
 
 # ============================================================
-# QUIZ UPLOAD WITH IMAGE GENERATION
+# QUIZ UPLOAD WITH MATCHING CARD
 # ============================================================
 
 @app.on_message(filters.command("quiz"))
@@ -293,10 +152,10 @@ async def start_quiz_process(client: Client, union_obj):
     doc_message = USER_ACTIVE_FILES.get(user_id)
 
     if not target_chat or not doc_message:
-        await message.reply_text("❌ File ya Target Chat ID miss hai!")
+        await message.reply_text("❌ File ya Target Chat ID missing hai!")
         return
 
-    status_msg = await message.reply_text("📥 Downloading & Generating Images...")
+    status_msg = await message.reply_text("📥 File Process ho rahi hai...")
     file_path = None
 
     try:
@@ -305,9 +164,10 @@ async def start_quiz_process(client: Client, union_obj):
         with open(file_path, "r", encoding="utf-8-sig") as f:
             content = f.read()
 
-        quizzes = parse_quiz_file(content)
+        # Naye quiz module parser se parse karein
+        quizzes = parse_match_quiz(content)
         if not quizzes:
-            await status_msg.edit_text("❌ No Valid Quizzes Found!")
+            await status_msg.edit_text("❌ No Valid Matching Quizzes Found! Check TXT format.")
             return
 
         target_chat_id = int(target_chat)
@@ -329,25 +189,31 @@ async def start_quiz_process(client: Client, union_obj):
                 await status_msg.edit_text(f"🛑 Upload Stopped! Posted: `{success_count}/{len(quizzes)}`")
                 break
 
-            img_path = f"q_{idx}_{user_id}.png"
+            img_path = f"q_card_{idx}_{user_id}.png"
 
             try:
-                # 1. सवाल से इमेज बनाएं
-                create_question_image(idx, q["question"], q["options"], img_path)
+                # 1. Image Card Generate Karein
+                generate_table_card(
+                    question_title=f"{idx}. {q['title']}",
+                    col1_title=q["col1_title"],
+                    col2_title=q["col2_title"],
+                    table_rows=q["rows"],
+                    output_path=img_path
+                )
 
-                # 2. चैनल पर इमेज भेजें
+                # 2. Telegram par Table Image Card bhejein
                 with open(img_path, "rb") as photo:
                     await client.send_photo(
                         chat_id=target_chat_id,
                         photo=photo,
-                        caption=f"❓ **Question #{idx}**"
+                        caption=f"<b>Match Question #{idx}</b>"
                     )
 
-                # 3. इमेज के नीचे असली Quiz Poll भेजें
+                # 3. Niche Quiz Poll Bhejein
                 await client.send_poll(
                     chat_id=target_chat_id,
-                    question=f"Choose correct option for Q{idx}:",
-                    options=["Option A", "Option B", "Option C", "Option D"],
+                    question=f"Choose correct matching option for Q{idx}:",
+                    options=q["options"],
                     type=PollType.QUIZ,
                     correct_option_id=int(q["correct_option_id"]),
                     explanation=q["explanation"],
@@ -355,14 +221,13 @@ async def start_quiz_process(client: Client, union_obj):
                 )
 
                 success_count += 1
-                await asyncio.sleep(2.5)  # Delay to prevent flood wait
+                await asyncio.sleep(2.5)  # FloodWait se bachne ke liye delay
 
             except Exception as e:
                 failed_count += 1
-                print(f"Error on Q{idx}: {e}")
+                print(f"Error Q{idx}: {e}")
 
             finally:
-                # लोकल जनरेटेड इमेज फाइल हटाएं
                 if os.path.exists(img_path):
                     os.remove(img_path)
 
@@ -374,7 +239,7 @@ async def start_quiz_process(client: Client, union_obj):
             )
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ **Main Error:** `{e}`")
+        await status_msg.edit_text(f"❌ **Error:** `{e}`")
 
     finally:
         STOP_TASKS.pop(user_id, None)
@@ -383,7 +248,7 @@ async def start_quiz_process(client: Client, union_obj):
 
 
 # ============================================================
-# /STOP
+# /STOP COMMAND
 # ============================================================
 
 @app.on_message(filters.command("stop"))
@@ -401,5 +266,5 @@ async def stop_quiz_process(client: Client, message: Message):
 # ============================================================
 
 if __name__ == "__main__":
-    print("QUIZ BOT STARTING...")
+    print("MATCHING QUIZ BOT STARTING...")
     app.run()
